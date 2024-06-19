@@ -3,14 +3,29 @@
 
 #include <stdio.h>
 #include <iostream>
+#include <assert.h>
 #define SIZE 1024
 
 using namespace std;
 
-__global__ void multiplyMatrices(int *d_v1, int *d_v2, int *d_vsum, int n)
+__global__ void multiplyMatrices(int *d_a, int *d_b, int *d_rez, int n)
 {
+    int row = blockIdx.y * blockDim.y + threadIdx.y;
+    int col = blockIdx.x * blockDim.x + threadIdx.x;
+
+    int temp_sum = 0;
+    if ((row < n) && (col < n))
+    {
+        for (int k = 0; k < n; k++)
+        {
+            temp_sum += d_a[row * n + k] * d_b[k * n + col];
+        }
+
+        d_rez[row * n + col] = temp_sum;
+    }
 }
 
+__host__ void verify(int *a, int *b, int *rez, int n);
 int main()
 {
     size_t bytes = SIZE * SIZE * sizeof(int);
@@ -31,8 +46,8 @@ int main()
         for (int j = 0; j < SIZE; j++)
         {
             int index = i * SIZE + j;
-            a[index] = index;
-            b[index] = index;
+            a[index] = index + 1;
+            b[index] = index + 1;
         }
     }
 
@@ -45,7 +60,51 @@ int main()
     dim3 grids(gridSize, gridSize);
     dim3 threads(blockSize, blockSize);
 
-    multiplyMatrices<<<grids, threads>>>(d_a, d_b, d_rez, SIZE * SIZE);
+    multiplyMatrices<<<grids, threads>>>(d_a, d_b, d_rez, SIZE);
+    cudaMemcpy(rez, d_rez, bytes, cudaMemcpyDeviceToHost);
+
+    verify(a, b, rez, SIZE);
+
+    free(a);
+    free(b);
+    free(rez);
+    cudaFree(d_a);
+    cudaFree(d_b);
+    cudaFree(d_rez);
+
+    cudaDeviceReset();
 
     return 0;
+}
+
+__host__ void verify(int *a, int *b, int *rez, int n)
+{
+    int *mat;
+    mat = (int *)malloc(n * n * sizeof(int));
+
+    for (int i = 0; i < n; i++)
+    {
+        for (int j = 0; j < n; j++)
+        {
+            for (int k = 0; k < n; k++)
+            {
+                mat[i * n + j] += a[i * n + k] * b[k * n + j];
+            }
+        }
+    }
+
+    cout << mat[5] << " " << rez[5] << " " << a[5] << b[5] << endl;
+
+    for (int i = 0; i < n; i++)
+    {
+        for (int j = 0; j < n; j++)
+        {
+            bool vazi = rez[i * n + j] == mat[i * n + j];
+
+            assert(vazi);
+            
+        }
+    }
+
+    cout << "Sljakam ko djokovic po beton" << endl;
 }
