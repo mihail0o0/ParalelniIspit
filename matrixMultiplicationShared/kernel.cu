@@ -5,24 +5,29 @@
 #include <iostream>
 #include <assert.h>
 #include <chrono>
-#define SIZE (1 << 10)
+#define SIZE (1 << 15)
+
+#define SHMEMSIZE (16 * 16 * 4)
 
 using namespace std;
 
-__global__ void multiplyMatrices(int *d_a, int *d_b, int *d_rez, int n)
+__global__ void sharedMultiplyMatrices(int *d_a, int *d_b, int *d_rez, int n, int tileSize)
 {
-    int row = blockDim.y * blockIdx.y + threadIdx.y;
-    int col = blockDim.x * blockIdx.x + threadIdx.x;
+    __shared__ int A[SHMEMSIZE];
+    __shared__ int B[SHMEMSIZE];
 
-    int currSum = 0;
+    int tx = threadIdx.x;
+    int ty = threadIdx.y;
+    int bx = blockIdx.x;
+    int by = blockIdx.y;
 
-    if (row < n && col < n)
+    int row = by * tileSize + ty;
+    int col = bx * tileSize + tx;
+
+    for (int i = 0; i < n / tileSize; i++)
     {
-        for (int k = 0; k < n; k++)
-        {
-            currSum += d_a[row * n + k] * d_b[k * n + col];
-        }
-        d_rez[row * n + col] = currSum;
+        A[(ty * tileSize) + tx] = d_a[row * n + (i * tileSize + tx)];
+        B[(ty * tileSize) + tx] = d_b[((i * tileSize + ty) * n) + col];
     }
 }
 
@@ -39,9 +44,9 @@ int main()
     b = (int *)malloc(bytes);
     rez = (int *)malloc(bytes);
 
-    cudaMalloc((void **)&d_a, bytes);
-    cudaMalloc((void **)&d_b, bytes);
-    cudaMalloc((void **)&d_rez, bytes);
+    cudaMalloc(&d_a, bytes);
+    cudaMalloc(&d_b, bytes);
+    cudaMalloc(&d_rez, bytes);
 
     for (int i = 0; i < SIZE; i++)
     {
@@ -56,8 +61,8 @@ int main()
     cudaMemcpy(d_a, a, bytes, cudaMemcpyHostToDevice);
     cudaMemcpy(d_b, b, bytes, cudaMemcpyHostToDevice);
 
-    int blockSize = 32;
-    int gridSize = (SIZE + blockSize - 1) / blockSize;
+    int blockSize = 256;
+    int gridSize = (SIZE + blockSize - 1 / blockSize);
 
     dim3 grids(gridSize, gridSize);
     dim3 threads(blockSize, blockSize);
@@ -65,17 +70,8 @@ int main()
     cout << "starting work..." << endl;
     auto start = chrono::high_resolution_clock::now();
 
-    multiplyMatrices<<<grids, threads>>>(d_a, d_b, d_rez, SIZE);
+    sharedMultiplyMatrices<<<grids, threads>>>(d_a, d_b, d_rez, SIZE);
     cudaMemcpy(rez, d_rez, bytes, cudaMemcpyDeviceToHost);
-
-    // for (int i = 0; i < SIZE; i++)
-    // {
-    //     for (int j = 0; j < SIZE; j++)
-    //     {
-    //         cout << rez[i * SIZE + j] << " ";
-    //     }
-    //     cout << endl;
-    // }
 
     auto end = chrono::high_resolution_clock::now();
 
@@ -86,7 +82,7 @@ int main()
 
     if (doVerification == "Y" || doVerification == "y")
     {
-    verify(a, b, rez, SIZE);
+        verify(a, b, rez, SIZE);
     }
 
     auto duration = chrono::duration_cast<chrono::milliseconds>(end - start);
@@ -119,8 +115,6 @@ __host__ void verify(int *a, int *b, int *rez, int n)
             }
         }
     }
-
-    cout << mat[10] << " " << rez[10] << endl;
 
     for (int i = 0; i < n; i++)
     {
