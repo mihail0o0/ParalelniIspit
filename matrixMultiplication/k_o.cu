@@ -11,8 +11,8 @@ using namespace std;
 
 __global__ void transpose(int *d_a, int *d_b, int *d_rez, int n)
 {
-    int row = (blockDim.y * blockIdx.y) + threadIdx.y;
-    int col = (blockDim.x * blockIdx.x) + threadIdx.x;
+    int row = blockDim.y * blockIdx.y + threadIdx.y;
+    int col = blockDim.x * blockIdx.x + threadIdx.x;
 
     int currSum = 0;
 
@@ -20,9 +20,8 @@ __global__ void transpose(int *d_a, int *d_b, int *d_rez, int n)
     {
         for (int k = 0; k < n; k++)
         {
-            currSum += d_a[row * n + k] * d_b[n * k + col];
+            currSum += d_a[row * n + k] * d_b[k * n + col];
         }
-
         d_rez[row * n + col] = currSum;
     }
 }
@@ -30,51 +29,55 @@ __global__ void transpose(int *d_a, int *d_b, int *d_rez, int n)
 __host__ void verify(int *a, int *b, int *rez, int n);
 int main()
 {
-    int *a;
-    int *b;
-    int *c;
-
-    int *d_a;
-    int *d_b;
-    int *d_c;
-
+    cout << SIZE << " x " << SIZE << " elements matrix." << endl;
     size_t bytes = SIZE * SIZE * sizeof(int);
+
+    int *a, *b, *rez;
+    int *d_a, *d_b, *d_rez;
 
     a = (int *)malloc(bytes);
     b = (int *)malloc(bytes);
-    c = (int *)malloc(bytes);
+    rez = (int *)malloc(bytes);
+
+    cudaMalloc((void **)&d_a, bytes);
+    cudaMalloc((void **)&d_b, bytes);
+    cudaMalloc((void **)&d_rez, bytes);
 
     for (int i = 0; i < SIZE; i++)
     {
         for (int j = 0; j < SIZE; j++)
         {
-            int index = i * SIZE + j + 1;
-            a[index] = index;
-            b[index] = index;
+            int index = i * SIZE + j;
+            a[index] = index + 1;
+            b[index] = index + 1;
         }
     }
-
-    cudaMalloc(&d_a, bytes);
-    cudaMalloc(&d_b, bytes);
-    cudaMalloc(&d_c, bytes);
 
     cudaMemcpy(d_a, a, bytes, cudaMemcpyHostToDevice);
     cudaMemcpy(d_b, b, bytes, cudaMemcpyHostToDevice);
 
-    int threadNum = 32;
-    int blockNum = (SIZE + threadNum - 1) / threadNum;
-    dim3 threads(threadNum, threadNum);
-    dim3 blocks(blockNum, threadNum);
+    int blockSize = 32;
+    int gridSize = (SIZE + blockSize - 1) / blockSize;
 
+    dim3 grids(gridSize, gridSize);
+    dim3 threads(blockSize, blockSize);
+
+    cout << "starting work..." << endl;
     auto start = chrono::high_resolution_clock::now();
 
-    transpose<<<threads, blocks>>>(d_a, d_b, d_c, SIZE);
-    cudaMemcpy(c, d_c, bytes, cudaMemcpyDeviceToHost);
+    transpose<<<grids, threads>>>(d_a, d_b, d_rez, SIZE);
+    cudaMemcpy(rez, d_rez, bytes, cudaMemcpyDeviceToHost);
+
+    // for (int i = 0; i < SIZE; i++)
+    // {
+    //     for (int j = 0; j < SIZE; j++)
+    //     {
+    //         cout << rez[i * SIZE + j] << " ";
+    //     }
+    //     cout << endl;
+    // }
 
     auto end = chrono::high_resolution_clock::now();
-    auto duration = chrono::duration_cast<chrono::milliseconds>(end - start);
-
-    cout << "Elapsed: " << duration.count() << "ms." << endl;
 
     string doVerification;
     cout << "Calculation finished, verify result? Y(es) N(o): ";
@@ -83,12 +86,22 @@ int main()
 
     if (doVerification == "Y" || doVerification == "y")
     {
-        start = chrono::high_resolution_clock::now();
-        verify(a, b, c, SIZE);
-        end = chrono::high_resolution_clock::now();
-        duration = chrono::duration_cast<chrono::milliseconds>(end - start);
-        cout << "CPU time elapsed: " << duration.count() << "ms." << endl;
+    verify(a, b, rez, SIZE);
     }
+
+    auto duration = chrono::duration_cast<chrono::milliseconds>(end - start);
+    cout << "Elapsed time: " << duration.count() << "ms." << endl;
+
+    free(a);
+    free(b);
+    free(rez);
+    cudaFree(d_a);
+    cudaFree(d_b);
+    cudaFree(d_rez);
+
+    cudaDeviceReset();
+
+    return 0;
 }
 
 __host__ void verify(int *a, int *b, int *rez, int n)
